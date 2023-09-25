@@ -1,12 +1,18 @@
 from flask import Flask, request, jsonify
 import statistics
+import threading
+import sys
+
 app = Flask(__name__)
 list_Samples = []
 Intervals = []
+non_outliers = []
+outliers = []
+lock = threading.Lock()
 
 
-def readintervals():
-    with open("input.txt", "r") as file:
+def readintervals(path):
+    with open(path, "r") as file:
         for line in file:
             content = line.split(",")
             Intervals.append([float(content[0]), float(content[1])])
@@ -20,12 +26,27 @@ def insertSamples():
     return "Samples Entered Successfully"
 
 
+def cal_frequency(intervals, frequency, element):
+    lock.acquire()
+    flag = True
+    for i in range(0, len(intervals), 1):
+        if intervals[i][0] <= element < intervals[i][1]:
+            non_outliers.append(element)
+            frequency[i] = frequency[i] + 1
+            flag = False
+            break
+
+    if flag:
+        outliers.append(element)
+    lock.release()
+
+
 @app.route('/api/v1/metrics', methods=['GET'])
 def metrics():
     Intervals.sort()
     non_overlap_Interval = []
-    non_outliers = []
-    outliers = []
+    threads = []
+    outliers.clear()
     end = Intervals[0][1]
     non_overlap_Interval.append([Intervals[0][0], Intervals[0][1]])
     for i in range(1, len(Intervals), 1):
@@ -33,26 +54,24 @@ def metrics():
             non_overlap_Interval.append([Intervals[i][0], Intervals[i][1]])
             end = Intervals[i][1]
 
+    if(len(non_overlap_Interval) < len(Intervals)) :
+        print("Some overlapping Intervals present taking the first occuring interval range wise in that case")
+
     frequency = [0] * len(non_overlap_Interval)
-    mean = 0
-    count = 0
     for samples in list_Samples:
-        flag = True
-        for i in range(0, len(non_overlap_Interval), 1):
-            if non_overlap_Interval[i][0] <= samples < non_overlap_Interval[i][1]:
-                non_outliers.append(samples)
-                frequency[i] = frequency[i] + 1
-                flag = False
-                break
-        if flag:
-            outliers.append(samples)
+        t = threading.Thread(target=cal_frequency, args=(non_overlap_Interval, frequency, samples,))
+        t.start()
+        threads.append(t)
+
+    for th in threads:
+        th.join()
 
     result = []
-    for i in range(0,len(non_overlap_Interval),1):
-        result.append(["[",non_overlap_Interval[i][0],non_overlap_Interval[i][1],")",frequency[i]])
+    for i in range(0, len(non_overlap_Interval), 1):
+        result.append(["[", non_overlap_Interval[i][0], non_overlap_Interval[i][1], ")", frequency[i]])
 
     return_json = {
-        "Frequency" : result,
+        "Frequency": result,
         "sample mean: ": statistics.mean(non_outliers),
         "sample variance: ": statistics.variance(non_outliers),
         "outliers :": outliers
@@ -61,5 +80,6 @@ def metrics():
 
 
 if __name__ == '__main__':
-    readintervals()
+    path = sys.argv[1]
+    readintervals(path)
     app.run(debug=True)
